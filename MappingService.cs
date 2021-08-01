@@ -45,7 +45,7 @@ namespace wsl_delegate
             [MarshalAs(UnmanagedType.LPTStr)] StringBuilder remoteName,
             ref int length);
 
-        private List<MappingDefinition> pathMappings;
+        public readonly List<MappingDefinition> pathMappings;
         public MappingService()
         {
             pathMappings = new List<MappingDefinition>();
@@ -261,37 +261,6 @@ namespace wsl_delegate
             }
 
             return null;
-        }
-
-        static bool isValidStart(char c)
-        {
-            return c == '\"' || c == ' ' || c == '\'';
-        }
-
-        public void toWinOnStream(StreamReader input, StreamWriter output)
-        {
-            string qwq = input.ReadToEnd();
-            for (string line = input.ReadLine(); line != null; line = input.ReadLine())
-            {
-                foreach (MappingDefinition curMapDef in pathMappings)
-                {
-                    for (int i = line.IndexOf(curMapDef.unixPath); i >= 0; i = line.IndexOf(curMapDef.unixPath, i))
-                    {
-                        if (i == 0 || isValidStart(line[i - 1]) || (i > 1 && line[i - 2] == '-' && Char.IsUpper(line[i - 1])))
-                        {
-                            String before = line.Substring(0, i);
-                            String after = line.Substring(i + curMapDef.unixPath.Length);
-                            line = before + curMapDef.winPath + after;
-                            i += curMapDef.winPath.Length;
-                        }
-                        else
-                        {
-                            i += curMapDef.unixPath.Length;
-                        }
-                    }
-                }
-                output.WriteLine(line.Replace('/', '\\').Replace('\u2018', '\'').Replace('\u2019', '\''));
-            }
         }
     }
 

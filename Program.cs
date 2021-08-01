@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
@@ -15,24 +16,34 @@ using System.Threading;
 namespace wsl_delegate
 {
 
-    class OutputParserWorker
+    class OutputParser
     {
-        MappingService mappingService;
-        StreamReader input;
-        StreamWriter output;
-        Process proc;
-        public OutputParserWorker(MappingService mappingService, StreamReader input, StreamWriter output, Process proc)
+        static bool isValidStart(char c)
         {
-            this.mappingService = mappingService;
-            this.input = input;
-            this.output = output;
-            this.proc = proc;
+            return c == '\"' || c == ' ' || c == '\'' || c == '=' || c==':';
         }
 
-        public void doWork()
+        public static string toWinByLine(MappingService mappingService, string line)
         {
-            while (!proc.HasExited)
-            mappingService.toWinOnStream(input, output);
+            foreach (MappingDefinition curMapDef in mappingService.pathMappings)
+            {
+                for (int i = line.IndexOf(curMapDef.unixPath); i >= 0; i = line.IndexOf(curMapDef.unixPath, i))
+                {
+                    if (i == 0 || isValidStart(line[i - 1]) || (i > 1 && line[i - 2] == '-' && Char.IsUpper(line[i - 1])))
+                    {
+                        String before = line.Substring(0, i);
+                        String after = line.Substring(i + curMapDef.unixPath.Length);
+                        line = before + curMapDef.winPath + after;
+                        i += curMapDef.winPath.Length;
+                    }
+                    else
+                    {
+                        i += curMapDef.unixPath.Length;
+                    }
+                }
+            }
+
+            return line.Replace('/', '\\').Replace('\u2018', '\'').Replace('\u2019', '\'');
         }
     }
 
@@ -123,13 +134,6 @@ namespace wsl_delegate
                 Console.WriteLine("WSL Command: \r\n" + wslCmdLine);
             }
 
-            bool attemptMount = false;
-            
-
-
-
-
-
             Process proc = new Process();
 
             proc.EnableRaisingEvents = true;
@@ -140,40 +144,67 @@ namespace wsl_delegate
             proc.StartInfo.FileName = "wsl";
             proc.StartInfo.Arguments = wslArgs;
 
-
-            // Console.SetBufferSize(Console.BufferWidth, 5000);
-
-            var standardOutput = new StreamWriter(Console.OpenStandardOutput());
+            var standardOutput = new StreamWriter(Console.OpenStandardOutput(10240));
             standardOutput.AutoFlush = true;
             Console.SetOut(standardOutput);
 
-            //var standardError = new StreamWriter(Console.OpenStandardError());
-            //standardError.AutoFlush = true;
-            //Console.SetError(standardError);
+            var standardError = new StreamWriter(Console.OpenStandardError());
+            standardError.AutoFlush = true;
+            Console.SetError(standardError);
 
-            // OutputParserWorker errorParser = new OutputParserWorker(ms, proc.StandardError, standardError);
-            //Thread errorParserThread = new Thread(errorParser.doWork);
-            //errorParserThread.Start();
             proc.OutputDataReceived += new DataReceivedEventHandler(onOutputDataReceived);
+            proc.ErrorDataReceived += new DataReceivedEventHandler(onErrorDataReceived);
             proc.Start();
             proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
 
-            //OutputParserWorker outputParser = new OutputParserWorker(ms, proc.StandardOutput, standardOutput, proc);
-            //Thread outputParserThread = new Thread(outputParser.doWork);
-            //outputParserThread.Start();
-            //outputParserThread.Join();
+            bool isEnd = false;
+            while (!isEnd)
+            {
+                string o = null;
+                if (queueOutput.TryDequeue(out o))
+                {
+                    if (o == null)
+                    {
+                        isEnd = true;
+                    } else
+                    {
+                        standardOutput.WriteLine(OutputParser.toWinByLine(ms, o));
+                    }
+                }
+            }
 
-            // ms.toWinOnStream(proc.StandardOutput, standardOutput);
+            isEnd = false;
+            while (!isEnd)
+            {
+                string o = null;
+                if (queueError.TryDequeue(out o))
+                {
+                    if (o == null)
+                    {
+                        isEnd = true;
+                    }
+                    else
+                    {
+                        standardError.WriteLine(OutputParser.toWinByLine(ms, o));
+                    }
+                }
+            }
+            
 
-            //errorParserThread.Join();
+            //proc.WaitForExit();
+        }
 
-            //string stdout = proc.StandardOutput.ReadToEnd();
-            //string stderr = proc.StandardError.ReadToEnd();
-            //stderr = stderr.Replace('\u2018', '\'').Replace('\u2019', '\'');
-            proc.WaitForExit();
-           
+        static ConcurrentQueue<string> queueOutput = new ConcurrentQueue<string>();
+        static ConcurrentQueue<string> queueError = new ConcurrentQueue<string>();
+        static void onOutputDataReceived(object sender, DataReceivedEventArgs e)
+        {
+            queueOutput.Enqueue(e.Data);
+        }
 
-            Console.ReadLine();
+        static void onErrorDataReceived(object sender, DataReceivedEventArgs e)
+        {
+            queueError.Enqueue(e.Data);
         }
     }
 }
